@@ -13,10 +13,10 @@ import (
 	"encoding/json"
 )
 
+// this could change! worth keeping an eye on :)
 const HACKATIME_API_BASE = "hackatime.hackclub.com"
 
 type HackatimeManager struct {
-	hackatimeCTX context.Context // the context provided for this manager.
 	hackatimeSecret string // our Hackatime application's client secret - this needs to STAY SERVERSIDE.
 	hackatimeUID string // our Hackatime application's client ID.
 	redirectURI string // the redirect URI provided to Hackatime for authentication callbacks
@@ -67,8 +67,8 @@ type HackatimeProject struct {
 	archived bool // true if the project is archived, false otherwise
 }
 
-func InitHackatimeManager(htc context.Context, hts, htuid, redirectURI string, HTTPClient *http.Client) *HackatimeManager {
-	return &HackatimeManager{hackatimeCTX: htc, hackatimeSecret: hts, hackatimeUID: htuid, redirectURI: redirectURI, HTTPClient: HTTPClient};
+func InitHackatimeManager(hts, htuid, redirectURI string, HTTPClient *http.Client) *HackatimeManager {
+	return &HackatimeManager{hackatimeSecret: hts, hackatimeUID: htuid, redirectURI: redirectURI, HTTPClient: HTTPClient};
 }
 
 // constructs the URL we provide a user to get a callback with their auth token
@@ -157,7 +157,7 @@ func (htm HackatimeManager) parseAuthResponse(parseCTX context.Context, token_re
 	}, nil;
 }
 
-// performs an OAuth code exchange with Hackatime, finally returning a
+// performs an OAuth code exchange with Hackatime, finally returning a Hackatime identity for the user
 func (htm HackatimeManager) ExchangeCode(ctx context.Context, auth_code string) (*HackatimeIdentity, error) {
 	authPostContext := context.WithValue(ctx, &authCode{}, auth_code);
 
