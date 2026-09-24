@@ -102,7 +102,6 @@ func (htm HackatimeManager) parseAuthResponse(parseCTX context.Context, token_re
 	// double check our context is still valid
 	if (parseCTX.Err() != nil) { return nil, fmt.Errorf("parse function was handed an invalid context: %w", parseCTX.Err())}
 	
-	
 	if err := parseCTX.Err(); err != nil {
 		return nil, fmt.Errorf("context already done before parsing response: %w", err);
 	}
@@ -207,12 +206,16 @@ func (htm HackatimeManager) ExchangeCode(ctx context.Context, auth_code string) 
 	return parsedIdentity, nil;
 }
 
+
 // hits the /api/v1/authenticated/hours endpoint to get the user's total seconds coding for a given range. start_date and end_date are in YYYY-MM-DD format
 // requires that your application have the `read` scope.
 func (htm HackatimeManager) GetHours(ctx context.Context, identity HackatimeIdentity, start_date, end_date string) (int64, error){
 	// check that the context is still valid
 	if (ctx.Err() != nil) { return -1, fmt.Errorf("context was invalid: %w", ctx.Err())}
 	
+	// before we go and try to do all the work of getting this data, let's make sure the user isn't banned:
+	// if they're banned, we're wasting the request because it'll just be 401ed anyways
+	if (identity.TrustFactor == TrustRed) { return -1, errors.New("the authenticated user is banned from Hackatime")}
 	// check that the start_date and end_date are valid
 	var start, end time.Time;
 	start, timeErr := time.Parse(time.DateOnly, start_date);
@@ -248,7 +251,7 @@ func (htm HackatimeManager) GetHours(ctx context.Context, identity HackatimeIden
 	case 403:
 		return -1, errors.New("Hackatime gave a 403 - your application doesn't have the right scopes to access hour data.");
 	case 401:
-		return -1, errors.New("Hackatime reported a 401 - your OAuth access token is missing or invalid, or your authenticated user is banned.");
+		return -1, errors.New("Hackatime reported a 401 - your OAuth access token is missing or invalid.");
 	}
 	if (hourData.StatusCode != 200) { return -1, fmt.Errorf("something has gone very wrong - Hackatime gave an improper status code (%d)", hourData.StatusCode)}
 	
@@ -261,4 +264,6 @@ func (htm HackatimeManager) GetHours(ctx context.Context, identity HackatimeIden
 }
 
 // convenience function that just calls GetHours() with today's date - importantly, "today" assumes UTC, so there may be jank related to timezones depending on your user.
-func (htm HackatimeManager) GetToday(ctx context.Context) { htm.GetHours(ctx, ) }
+// messy one-liner, but it's just a wrapper function after all
+func (htm HackatimeManager) GetToday(ctx context.Context, identity HackatimeIdentity) { today := time.Now().Format(time.DateOnly); htm.GetHours(ctx, identity, today, today); }
+
