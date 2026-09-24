@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,16 +34,16 @@ type HackatimeManager struct {
 // An enum corresponding to a Hackatime user's active trust level - can be Red, Yellow, Blue, or Green based on their standing.
 type HackatimeTrustFactor int;
 const (
-	BLUE HackatimeTrustFactor = iota
-	RED
-	GREEN
-	YELLOW
+	TrustBlue HackatimeTrustFactor = iota
+	TrustRed
+	TrustGreen
+	TrustYellow
 )
 var hackatimeTrustFactorName = map[HackatimeTrustFactor]string {
-	RED: "Banned",
-	YELLOW: "Suspicious",
-	BLUE: "Normal", 
-	GREEN: "Trusted",
+	TrustRed: "Banned",
+	TrustYellow: "Suspicious",
+	TrustBlue: "Normal", 
+	TrustGreen: "Trusted",
 }
 
 func (tf HackatimeTrustFactor) String() string {
@@ -120,20 +121,20 @@ func (htm HackatimeManager) parseAuthResponse(parseCTX context.Context, token_re
 	defer grabClose();
 
 	// prep and send our GET request to Hackatime
-	grab_req, grabErr := http.NewRequestWithContext(grabCTX, http.MethodGet, "https://hackatime.hackclub.com/api/v1/authenticated/me", http.NoBody)
+	grabReq, grabErr := http.NewRequestWithContext(grabCTX, http.MethodGet, "https://hackatime.hackclub.com/api/v1/authenticated/me", http.NoBody)
 	if grabErr != nil {
 		return nil, fmt.Errorf("error prepping request to grab user's Hackatime data: %w", grabErr);
 	}
-	grab_req.Header.Set("Authorization", "Bearer " + parsed.AccessToken)
-	grab_resp, respErr := htm.HTTPClient.Do(grab_req)
+	grabReq.Header.Set("Authorization", "Bearer " + parsed.AccessToken)
+	grabResp, respErr := htm.HTTPClient.Do(grabReq)
 	if respErr != nil {
 		return nil, fmt.Errorf("error sending request to grab user's Hackatime data: %w", respErr);
 	}
 
 	// send was successful, let's parse the response
-	defer grab_resp.Body.Close()
-	if grab_resp.StatusCode < 200 || grab_resp.StatusCode > 299 {
-		return nil, fmt.Errorf("request to grab user's Hackatime data gave a non-success status code: %d", grab_resp.StatusCode)
+	defer grabResp.Body.Close()
+	if grabResp.StatusCode < 200 || grabResp.StatusCode > 299 {
+		return nil, fmt.Errorf("request to grab user's Hackatime data gave a non-success status code: %d", grabResp.StatusCode)
 	}
 
 	type trustFactorResponse struct {
@@ -150,7 +151,7 @@ func (htm HackatimeManager) parseAuthResponse(parseCTX context.Context, token_re
 	}
 	var parsedGet meResponse
 	
-	if err := json.NewDecoder(grab_resp.Body).Decode(&parsedGet); err != nil {
+	if err := json.NewDecoder(grabResp.Body).Decode(&parsedGet); err != nil {
 		return nil, fmt.Errorf("decoding HT identity response: %w", err);
 	}
 
@@ -170,7 +171,7 @@ func (htm HackatimeManager) ExchangeCode(ctx context.Context, auth_code string) 
 	
 	authPostContext := context.WithValue(ctx, &authCode{}, auth_code);
 
-	auth_reqctx, authReqCancel := context.WithTimeout(authPostContext, time.Second * 10);
+	authReqContext, authReqCancel := context.WithTimeout(authPostContext, time.Second * 10);
 	defer authReqCancel();
 
 	token_req_body, marshalErr := json.Marshal(map[string]any{
@@ -182,28 +183,28 @@ func (htm HackatimeManager) ExchangeCode(ctx context.Context, auth_code string) 
 	});
 
 	if marshalErr != nil {
-		return nil, fmt.Errorf("Failed to marshal JSON to POST to Hackatime: %w", marshalErr);
+		return nil, fmt.Errorf("failed to marshal JSON to POST to Hackatime: %w", marshalErr);
 	}
 
-	prepared_req, prepErr := http.NewRequestWithContext(auth_reqctx, "POST", "https://hackatime.hackclub.com/oauth/token", bytes.NewReader(token_req_body));
+	preparedReq, prepErr := http.NewRequestWithContext(authReqContext, "POST", "https://hackatime.hackclub.com/oauth/token", bytes.NewReader(token_req_body));
 	if prepErr != nil {
-		return nil, fmt.Errorf("Failed to prepare an HTTP request to Hackatime: %w", prepErr);
+		return nil, fmt.Errorf("failed to prepare an HTTP request to Hackatime: %w", prepErr);
 	}
 
-	token_resp, responseErr := htm.HTTPClient.Do(prepared_req);
+	tokenResp, responseErr := htm.HTTPClient.Do(preparedReq);
 	if responseErr != nil {
-		return nil, fmt.Errorf("Something went wrong trying to authenticate to Hackatime.");
+		return nil, fmt.Errorf("something went wrong trying to authenticate to Hackatime: %w", responseErr);
 	}
 
 	parseCTX, parseCancel := context.WithTimeout(ctx, 2 * time.Second);
 	defer parseCancel()
 
-	parsed_identity, idErr := htm.parseAuthResponse(parseCTX, token_resp)
+	parsedIdentity, idErr := htm.parseAuthResponse(parseCTX, tokenResp)
 
 	if idErr != nil {
 		return nil, fmt.Errorf("Error parsing HCA callback");
 	}
-	return parsed_identity, nil;
+	return parsedIdentity, nil;
 }
 
 // hits the /api/v1/authenticated/hours endpoint to get the user's total seconds coding for a given range. start_date and end_date are in YYYY-MM-DD format
@@ -245,11 +246,11 @@ func (htm HackatimeManager) GetHours(ctx context.Context, identity HackatimeIden
 	defer hourData.Body.Close();
 	switch (hourData.StatusCode) {
 	case 403:
-		return -1, fmt.Errorf("Hackatime gave a 403 - your application doesn't have the right scopes to access hour data.");
+		return -1, errors.New("Hackatime gave a 403 - your application doesn't have the right scopes to access hour data.");
 	case 401:
-		return -1, fmt.Errorf("Hackatime reported a 401 - your OAuth access token is missing or invalid, or your authenticated user is banned.");
+		return -1, errors.New("Hackatime reported a 401 - your OAuth access token is missing or invalid, or your authenticated user is banned.");
 	}
-	if (hourData.StatusCode != 200) { return -1, fmt.Errorf("Something has gone very wrong - Hackatime gave an improper status code (%d)", hourData.StatusCode)}
+	if (hourData.StatusCode != 200) { return -1, fmt.Errorf("something has gone very wrong - Hackatime gave an improper status code (%d)", hourData.StatusCode)}
 	
 	var parsed struct {
 		TotalSeconds float64 `json:"total_seconds"`
@@ -258,3 +259,6 @@ func (htm HackatimeManager) GetHours(ctx context.Context, identity HackatimeIden
 	if (parseErr != nil) { return -1, fmt.Errorf("error parsing JSON response from Hackatime: %w", parseErr)}
 	return int64(parsed.TotalSeconds), nil;
 }
+
+// convenience function that just calls GetHours() with today's date - importantly, "today" assumes UTC, so there may be jank related to timezones depending on your user.
+func (htm HackatimeManager) GetToday(ctx context.Context) { htm.GetHours(ctx, ) }
